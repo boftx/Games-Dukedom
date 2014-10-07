@@ -1,0 +1,23 @@
+#!/usr/local/bin/perl
+
+use strict;
+use warnings;
+
+use Games::Dukedom;
+
+my $VERSION = '0.1_1';
+
+play_game();
+
+exit;
+
+sub play_game {
+    my $game = Games::Dukedom->new;
+
+    do {
+        $game->play_one_year;
+    } until ( $game->end_of_game );
+}
+
+__END__
+
