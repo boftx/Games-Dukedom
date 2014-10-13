@@ -3,11 +3,29 @@
 use strict;
 use warnings;
 
+use Scalar::Util qw( blessed );
+use Try::Tiny;
+
 use Games::Dukedom;
+
+use Storable qw( freeze thaw );
+
+use Data::Dumper;
+$Data::Dumper::Indent = 1;
 
 my $VERSION = '0.1_1';
 
-play_game();
+while (1) {
+    play_game();
+
+    print "Do you want to play again [Y/n]? ";
+    my $play = <>;
+    chomp($play);
+    $play ||= 'Y';
+
+    last unless $play =~ /^y/i;
+    print "Okay, let's go again. Good luck!\n\n";
+}
 
 exit;
 
@@ -15,8 +33,27 @@ sub play_game {
     my $game = Games::Dukedom->new;
 
     do {
-        $game->play_one_year;
-    } until ( $game->end_of_game );
+        try {
+            $game->play_one_year;
+        }
+        catch {
+            if ( blessed($_) && $_->isa('Games::Dukedom::Signal') ) {
+                &{ $game->show_msg }( $_->display ) if $_->display;
+                if ( defined( $_->request ) ) {
+                    my $request = $_->request;
+                    $game->input( &{ $game->$request } || $_->default );
+                }
+            }
+            else {
+                die $_;
+            }
+        };
+    } until ( $game->game_over );
+
+    #print Dumper($game);
+    #print $game->end_of_year_report;
+
+    return;
 }
 
 __END__
