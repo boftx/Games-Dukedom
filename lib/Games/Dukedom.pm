@@ -120,6 +120,10 @@ my %traits = (
         q1 => 4,
         q2 => 8,
     },
+    merc_quality => {
+        q1 => 8,
+        q2 => 8,
+    },
 );
 
 my $fnr = sub {
@@ -666,7 +670,11 @@ sub war_with_the_king {
     $msg .= sprintf( "You have hired %d foreign mercenaries\n", $mercs );
     $msg .= "at 100 HL. each (payment in advance)\n\n";
 
-    if ( ( $self->grain * $mercs ) + $self->population > 2399 ) {
+    # the source i ported from used this, but i found another version
+    # that used the value i have changed to.
+    #if ( ( $self->grain * $mercs ) + $self->population > 2399 ) {
+    #if ( ( 8 * $mercs ) + $self->population > 2399 ) {
+    if ( ( int($self->randomize('merc_quality')) * $mercs ) + $self->population > 2399 ) {
         $msg .= "Wipe the blood from the crown - you are now High King!\n\n";
         $msg .= "A nearby monarchy threatens war; ";
         $msg .= "how many .........\n\n\n\n";
@@ -689,14 +697,17 @@ sub king_wants_war {
     return unless $self->king_unrest > 0;
 
     my $msg = "The King demands twice the royal tax in the\n";
-    $msg .= 'hope of provoking war.  Will you pay? [y/N]: ';
+    #$msg .= 'hope of provoking war.  Will you pay? [y/N]: ';
+    $msg .= 'hope of provoking war.  Will you pay? [Y/n]: ';
 
     $self->next_step('king_wants_war')
-      and $self->throw( display => $msg, request => 'get_yn', default => 'N' )
+#      and $self->throw( display => $msg, request => 'get_yn', default => 'N' )
+      and $self->throw( display => $msg, request => 'get_yn', default => 'Y' )
       unless $self->input_is_yn;
 
     my $ans = $self->input;
-    $ans ||= 'N';
+    #$ans ||= 'N';
+    $ans ||= 'Y';
 
     $self->_set_king_unrest( ( $ans =~ /^n/i ) ? -1 : 2 );
 
@@ -860,6 +871,8 @@ sub kings_levy {
 
     return if ( $self->population < 67 ) || ( $self->king_unrest == -1 );
 
+    # there is an edge case where entering an invalid answer might allow
+    # one to avoid this, but ... who cares
     my $x1 = $self->randomize('levies');
     return if $x1 > ( $self->population / 30 );
 
@@ -939,20 +952,20 @@ sub first_strike {
 
     $self->{_msg} = '';
     if ( $self->input !~ /^n/i ) {
-        if ( $self->_war->{first_stike} >= $x5 ) {
+        if ( $self->_war->{first_strike} >= $x5 ) {
             $self->next_step('goto_war');
             $self->{_msg} = "First strike failed - you need professionals\n";
             $population->{casualties} = -$self->war - $self->_war->potential - 2;
-            $self->_war->{first_stike} += ( 3 * $population->casualties );
+            $self->_war->{first_strike} += ( 3 * $population->casualties );
         }
         else {
             $self->{_msg} = "Peace negotiations were successful\n";
 
             $population->{casualties} = -$self->_war->potential - 1;
-            $self->_war->{first_stike} = 0;
+            $self->_war->{first_strike} = 0;
         }
         $self->{population} += $population->casualties;
-        if ( $self->_war->first_stike < 1 ) {
+        if ( $self->_war->first_strike < 1 ) {
             $self->{_unrest} -=
               ( 2 * $population->casualties ) + ( 3 * $population->looted );
         }
