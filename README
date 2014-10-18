@@ -25,6 +25,7 @@ Moo
 MooX::StrictConstructor
 MooX::ClassAttribute
 MooX::Struct
+Throwable
 
 COPYRIGHT AND LICENCE
 

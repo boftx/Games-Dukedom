@@ -12,11 +12,11 @@ use Test::More;
 plan tests => 1;
 
 BEGIN {
-    use_ok( 'Games::Dukedom' )
+    use_ok('Games::Dukedom')
       || BAIL_OUT "Can not use Games::Dukedom\n";
 }
 
-diag( "Testing Games::Dukedom $Games::Dukedom::VERSION, Perl $], $^X" );
+diag("Testing Games::Dukedom $Games::Dukedom::VERSION, Perl $], $^X");
 
 done_testing();
 

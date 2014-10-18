@@ -2,9 +2,7 @@ package Games::Dukedom;
 
 our $VERSION = 'v0.1_1';
 
-use Data::Dumper;
-$Data::Dumper::Sortkeys = 1;
-$Data::Dumper::Indent   = 1;
+our $DEBUG = 0;
 
 use Storable qw( freeze thaw );
 use Carp;
@@ -15,12 +13,7 @@ use Moo;
 use MooX::StrictConstructor;
 use MooX::ClassAttribute;
 
-use MooX::Struct -rw, Unrest => [
-    qw(
-      +population
-      )
-  ],
-  Land => [
+use MooX::Struct -rw, Land => [
     qw(
       +delta
       +trades
@@ -66,24 +59,44 @@ use MooX::Struct -rw, Unrest => [
       )
   ];
 
-use constant MAX_FOOD_BONUS => 4;
-use constant MAX_SELL_TRIES => 3;
-use constant MAX_SALE       => 4000;
-use constant MIN_LAND_PRICE => 4;
+# status codes
+use constant RUNNING   => 0;
+use constant RETIRED   => 1;
+use constant KINGDOM   => 2;
+use constant DEPOSED   => -1;
+use constant ABOLISHED => -2;
+use constant QUIT_GAME => -3;
+
+# magic numbers
+use constant RUNNING          => 0;
+use constant TAX_RATE         => .5;
+use constant MAX_YEAR         => 45;
+use constant MIN_LAND         => 45;
+use constant MIN_POPULATION   => 33;
+use constant MIN_GRAIN        => 429;
+use constant MAX_FOOD_BONUS   => 4;
+use constant MAX_SALE         => 4000;
+use constant MAX_SELL_TRIES   => 3;
+use constant MIN_LAND_PRICE   => 4;
+use constant MIN_EXPENSE      => 429;
+use constant WAR_CONSTANT     => 1.95;
+use constant UNREST_FACTOR    => .85;
+use constant MAX_1YEAR_UNREST => 88;
+use constant MAX_TOTAL_UNREST => 99;
 
 my @steps = (
     qw(
-      init_year
-      feed_the_peasants
-      starvation_and_unrest
-      purchase_land
-      war_with_the_king
-      grain_production
-      kings_levy
-      war_with_neigbor
-      population_changes
-      harvest_grain
-      update_unrest
+      _init_year
+      _feed_the_peasants
+      _starvation_and_unrest
+      _purchase_land
+      _war_with_the_king
+      _grain_production
+      _kings_levy
+      _war_with_neigbor
+      _population_changes
+      _harvest_grain
+      _update_unrest
       )
 );
 
@@ -157,22 +170,25 @@ my $print_msg = sub {
 };
 
 my $input_yn = sub {
-    my $default = shift || 'n';
+    my $default = shift || '';
 
     my $ans = <>;
     chomp($ans);
     $ans ||= $default;
 
-    return unless $ans =~ /^(?:y|n)$/i;
-
-    return lc($ans);
+    return ( $ans =~ /^(?:q|quit)\s*$/i || $ans =~ /^(?:y|n)$/i )
+      ? lc($ans)
+      : undef;
 };
 
 my $input_value = sub {
+    my $default = shift || 0;
+
     my $ans = <>;
     chomp($ans);
+    $ans = $default unless length($ans);
 
-    return ( $ans !~ /\D/ ) ? $ans : undef;
+    return ( $ans =~ /^(?:q|quit)\s*$/i || $ans !~ /\D/ ) ? $ans : undef;
 };
 
 class_has signal => (
@@ -197,17 +213,7 @@ class_has get_value => (
     default => sub { $input_value },
 );
 
-class_has max_year => (
-    is      => 'rw',
-    default => 45,
-);
-
-class_has war_constant => (
-    is      => 'ro',
-    default => 1.95,
-);
-
-has base_chance => (
+has _base_values => (
     is       => 'ro',
     init_arg => undef,
     default  => sub {
@@ -327,9 +333,10 @@ has black_D => (
 );
 
 has input => (
-    is      => 'rw',
-    clearer => 1,
-    default => undef,
+    is       => 'rw',
+    init_arg => undef,
+    clearer  => 1,
+    default  => undef,
 );
 
 has _steps => (
@@ -342,7 +349,7 @@ has _steps => (
 has status => (
     is       => 'rwp',
     init_arg => undef,
-    default  => 'running',
+    default  => RUNNING,
 );
 
 has _msg => (
@@ -361,7 +368,7 @@ sub BUILD {
 # guarantee we have a clean input if needed. this avoids a potential
 # problem if the "clear_" behavior changes.
 before throw => sub {
-    my $self = shift;
+    my $self   = shift;
     my %params = @_;
 
     $self->clear_input;
@@ -369,12 +376,15 @@ before throw => sub {
     return;
 };
 
-sub randomize {
+around input => sub {
+    my $orig  = shift;
     my $self  = shift;
-    my $trait = shift;
+    my $input = $_[0] || '';
 
-    return int( &$fnr( -2, 2 ) + $self->base_chance->{$trait} );
-}
+    $self->_next_step('_quit_game') if $input =~ /^(?:q|quit)\s*$/i;
+
+    return $self->$orig(@_);
+};
 
 sub input_is_yn {
     my $self = shift;
@@ -391,16 +401,7 @@ sub input_is_value {
     my $value = $self->input;
     chomp($value) if defined($value);
 
-    return !!( defined($value) && ( $value =~ /^(?:\d+)$/ ) );
-}
-
-sub next_step {
-    my $self = shift;
-    my $next = shift;
-
-    croak 'Illegal value for "next_step"' unless $self->can($next);
-
-    return unshift( @{ $self->_steps }, $next );
+    return !!( defined($value) && ( $value =~ /^\d+$/ ) );
 }
 
 sub play_one_year {
@@ -422,16 +423,35 @@ sub play_one_year {
     $self->_clear_land;
     $self->_clear_war;
 
-    $self->end_of_game_check;
+    $self->_end_of_game_check;
 
     return;
 }
 
-sub init_year {
+sub game_over {
     my $self = shift;
 
-#    print "in init_year\n";
-#    print Dumper( $self->_steps );
+    return !!( $self->status != RUNNING );
+}
+
+sub _next_step {
+    my $self = shift;
+    my $next = shift;
+
+    croak 'Illegal value for "_next_step"' unless $self->can($next);
+
+    return unshift( @{ $self->_steps }, $next );
+}
+
+sub _randomize {
+    my $self  = shift;
+    my $trait = shift;
+
+    return int( &$fnr( -2, 2 ) + $self->_base_values->{$trait} );
+}
+
+sub _init_year {
+    my $self = shift;
 
     ++$self->{year};
 
@@ -442,7 +462,7 @@ sub init_year {
     $self->{_unrest} = 0;
 
     $self->_land->{price} =
-      int( ( 2 * $self->yield ) + $self->randomize('price') - 5 );
+      int( ( 2 * $self->yield ) + $self->_randomize('price') - 5 );
     $self->_land->{price} = MIN_LAND_PRICE
       if $self->_land->price < MIN_LAND_PRICE;
 
@@ -451,12 +471,12 @@ sub init_year {
     $self->{_msg} = $self->summary_report;
     $self->{_msg} .= $self->fertility_report;
 
-    $self->next_step('display_msg');
+    $self->_next_step('_display_msg');
 
     return;
 }
 
-sub display_msg {
+sub _display_msg {
     my $self = shift;
 
     $self->throw( display => $self->_clear_msg );
@@ -484,34 +504,34 @@ sub fertility_report {
     return $msg;
 }
 
-sub feed_the_peasants {
+sub _feed_the_peasants {
     my $self = shift;
 
     my $hint = ( $self->grain / $self->population ) < 11 ? $self->grain : 14;
 
-    $self->next_step('feed_the_peasants')
+    $self->_next_step('_feed_the_peasants')
       and $self->throw(
         display => "Grain for food [$hint]: ",
-        request => 'get_value',
+        action  => 'get_value',
         default => $hint,
-    ) unless $self->input_is_value;
+      ) unless $self->input_is_value;
 
     my $food = $self->input;
 
     # shortcut
-    $food *= $self->population if ( $food < 100  && $self->grain > $food );
+    $food *= $self->population if ( $food < 100 && $self->grain > $food );
 
     if ( $food > $self->grain ) {
-        $self->next_step('feed_the_peasants');
+        $self->_next_step('_feed_the_peasants');
 
-        $self->throw( display => $self->_insufficient_grain );
+        $self->throw( display => $self->_insufficient_grain('feed') );
     }
     elsif (( ( $food / $self->population ) < 11 )
         && ( $food != $self->grain ) )
     {
         $self->{_unrest} += 3;
 
-        $self->next_step('feed_the_peasants');
+        $self->_next_step('_feed_the_peasants');
 
         my $msg = "The peasants demonstrate before the castle\n";
         $msg .= "with sharpened scythes\n\n";
@@ -524,7 +544,7 @@ sub feed_the_peasants {
     return;
 }
 
-sub starvation_and_unrest {
+sub _starvation_and_unrest {
     my $self = shift;
 
     my $food = -$self->_grain->food;
@@ -545,28 +565,28 @@ sub starvation_and_unrest {
 
     if ( $self->_population->starvations < 0 ) {
         $self->_msg("Some peasants have starved during the winter\n");
-        $self->next_step('display_msg');
+        $self->_next_step('_display_msg');
     }
 
     return ( ( $self->_unrest > 88 ) || ( $self->population < 33 ) );
 }
 
-sub purchase_land {
+sub _purchase_land {
     my $self = shift;
 
     my $land  = $self->_land;
     my $grain = $self->_grain;
 
     my $msg = sprintf( "Land to buy at %d HL/HA [0]: ", int( $land->{price} ) );
-    $self->next_step('purchase_land')
-      and $self->throw( display => $msg, request => 'get_value', default => 0 )
+    $self->_next_step('_purchase_land')
+      and $self->throw( display => $msg, action => 'get_value', default => 0 )
       unless $self->input_is_value();
 
-    $self->next_step('sell_land') and return
+    $self->_next_step('_sell_land') and return
       unless my $buy = $self->input;
 
-    $self->next_step('purchase_land')
-      and $self->throw( display => $self->_insufficient_grain )
+    $self->_next_step('_purchase_land')
+      and $self->throw( display => $self->_insufficient_grain('buy') )
       if ( $buy * $land->price > $self->grain );
 
     $self->land_fertility->{60} += $buy;
@@ -578,7 +598,7 @@ sub purchase_land {
     return;
 }
 
-sub sell_land {
+sub _sell_land {
     my $self = shift;
 
     my $land  = $self->_land;
@@ -598,19 +618,19 @@ sub sell_land {
     my $price = --$land->{sell_price};
 
     my $msg = sprintf( "Land to sell at %d HL/HA [0]: ", $price );
-    $self->next_step('sell_land')
-      and $self->throw( display => $msg, request => 'get_value', default => 0 )
+    $self->_next_step('_sell_land')
+      and $self->throw( display => $msg, action => 'get_value', default => 0 )
       unless $self->input_is_value();
 
     return unless my $sold = $self->input;
 
     $self->{_msg} = undef;
     if ( $sold > $x1 ) {
-        $self->next_step('display_msg');
+        $self->_next_step('_display_msg');
         $self->{_msg} = sprintf( "You only have %d HA. of good land\n", $x1 );
     }
     elsif ( ( $grain->{trades} = $sold * $price ) > MAX_SALE ) {
-        $self->next_step('display_msg');
+        $self->_next_step('_display_msg');
         $self->{_msg} = "No buyers have that much grain - sell less\n";
     }
     return if $self->_msg;
@@ -642,7 +662,7 @@ sub sell_land {
     $self->land_fertility->{$sold_q} -= $sold;
     $self->land += $land->trades;
 
-    $self->_set_status('game_over') if $self->land < 10;
+    $self->_set_status(ABOLISHED) if $self->land < 10;
 
     $msg = '';
     if ( ( $price < MIN_LAND_PRICE ) && $sold ) {
@@ -657,10 +677,10 @@ sub sell_land {
     return;
 }
 
-sub war_with_the_king {
+sub _war_with_the_king {
     my $self = shift;
 
-    $self->king_wants_war if $self->king_unrest > 0;
+    $self->_king_wants_war if $self->king_unrest > 0;
 
     return if $self->king_unrest > -2;
 
@@ -670,43 +690,53 @@ sub war_with_the_king {
     $msg .= sprintf( "You have hired %d foreign mercenaries\n", $mercs );
     $msg .= "at 100 HL. each (payment in advance)\n\n";
 
-    # the source i ported from used this, but i found another version
-    # that used the value i have changed to.
-    #if ( ( $self->grain * $mercs ) + $self->population > 2399 ) {
-    #if ( ( 8 * $mercs ) + $self->population > 2399 ) {
-    if ( ( int($self->randomize('merc_quality')) * $mercs ) + $self->population > 2399 ) {
+    # assuming a population > 200 at the time of your revolt, # the C source
+    # i ported from allowed one to win with as few as 5 mercs.
+    # if ( ( $self->grain * $mercs ) + $self->population > 2399 ) {
+    #
+    # the Java source changed it so it took significantly more, about 275 but
+    # was still a fixed value.
+    # if ( ( 8 * $mercs ) + $self->population > 2399 ) {
+    #
+    # i've added an element of chance. again, assuming a populaton of 200, it
+    # now requires anywhere from 219 to 366 mercs to win depending on the
+    # quality of merc you hire. this means you must have at least 22,000 in
+    # grain to win, and as much as 37,000 if your mercs suck.
+    if ( ( int( $self->_randomize('merc_quality') ) * $mercs ) +
+        $self->population > 2399 )
+    {
         $msg .= "Wipe the blood from the crown - you are now High King!\n\n";
         $msg .= "A nearby monarchy threatens war; ";
         $msg .= "how many .........\n\n\n\n";
+
+        $self->_set_status(KINGDOM);
     }
     else {
         $msg .= "The placement of your head atop the castle gate signifies\n";
         $msg .= "that the High King has abolished your Ducal right\n\n";
+
+        $self->_set_status(ABOLISHED);
     }
-    $self->_set_status('game_over');
 
     $self->{_msg}   = $msg;
-    $self->{_steps} = ['display_msg'];
+    $self->{_steps} = ['_display_msg'];
 
     return;
 }
 
-sub king_wants_war {
+sub _king_wants_war {
     my $self = shift;
 
     return unless $self->king_unrest > 0;
 
     my $msg = "The King demands twice the royal tax in the\n";
-    #$msg .= 'hope of provoking war.  Will you pay? [y/N]: ';
     $msg .= 'hope of provoking war.  Will you pay? [Y/n]: ';
 
-    $self->next_step('king_wants_war')
-#      and $self->throw( display => $msg, request => 'get_yn', default => 'N' )
-      and $self->throw( display => $msg, request => 'get_yn', default => 'Y' )
+    $self->_next_step('_king_wants_war')
+      and $self->throw( display => $msg, action => 'get_yn', default => 'Y' )
       unless $self->input_is_yn;
 
     my $ans = $self->input;
-    #$ans ||= 'N';
     $ans ||= 'Y';
 
     $self->_set_king_unrest( ( $ans =~ /^n/i ) ? -1 : 2 );
@@ -714,23 +744,23 @@ sub king_wants_war {
     return;
 }
 
-sub grain_production {
+sub _grain_production {
     my $self = shift;
 
     my $done = 0;
 
     my $pop_plant   = $self->population * 4;
-    my $grain_plant = int($self->grain / 2);
+    my $grain_plant = int( $self->grain / 2 );
     my $max_grain_plant =
       $grain_plant > $self->land ? $self->land : $grain_plant;
     my $max_plant =
       $pop_plant > $max_grain_plant ? $max_grain_plant : $pop_plant;
 
     my $msg = sprintf( "Land to plant [%d]: ", $max_plant );
-    $self->next_step('grain_production')
+    $self->_next_step('_grain_production')
       and $self->throw(
         display => $msg,
-        request => 'get_value',
+        action  => 'get_value',
         default => $max_plant
       ) unless $self->input_is_value();
 
@@ -750,11 +780,11 @@ sub grain_production {
     }
     $grain->{seed} = -2 * $plant;
     if ( -$grain->seed > $self->grain ) {
-        $msg = $self->_insufficient_grain();
+        $msg = $self->_insufficient_grain('plant');
     }
 
     if ($msg) {
-        $self->next_step('grain_production');
+        $self->_next_step('_grain_production');
         $self->throw( display => $msg );
     }
 
@@ -762,13 +792,13 @@ sub grain_production {
     $self->_land->{planted} = $plant;
     $self->{grain} += $grain->seed;
 
-    my $tmp_quality = $self->update_land_tables($plant);
-    $self->crop_yield_and_losses($tmp_quality);
+    my $tmp_quality = $self->_update_land_tables($plant);
+    $self->_crop_yield_and_losses($tmp_quality);
 
     return;
 }
 
-sub update_land_tables {
+sub _update_land_tables {
     my $self  = shift;
     my $plant = shift;
 
@@ -826,13 +856,13 @@ sub update_land_tables {
     return \%tmp_quality;
 }
 
-sub crop_yield_and_losses {
+sub _crop_yield_and_losses {
     my $self  = shift;
     my $tmp_q = shift;
 
     $self->{_msg} = '';
 
-    $self->{yield} = $self->randomize('yield') + 3;
+    $self->{yield} = $self->_randomize('yield') + 3;
     if ( !( $self->year % 7 ) ) {
         $self->{_msg} .= "Seven year locusts\n";
         $self->{yield} /= 2;
@@ -854,26 +884,26 @@ sub crop_yield_and_losses {
     }
     $self->{_msg} .= sprintf( "Yield = %0.2f HL./HA.\n", $self->yield );
 
-    $x1 = $self->randomize('spoilage') + 3;
+    $x1 = $self->_randomize('spoilage') + 3;
     unless ( $x1 < 9 ) {
         $grain->{spoilage} = -int( ( $x1 * $self->grain ) / 83 );
         $self->{grain} += $grain->{spoilage};
         $self->{_msg} .= "Rats infest the grainery\n";
     }
 
-    $self->next_step('display_msg');
+    $self->_next_step('_display_msg');
 
     return;
 }
 
-sub kings_levy {
+sub _kings_levy {
     my $self = shift;
 
     return if ( $self->population < 67 ) || ( $self->king_unrest == -1 );
 
     # there is an edge case where entering an invalid answer might allow
     # one to avoid this, but ... who cares
-    my $x1 = $self->randomize('levies');
+    my $x1 = $self->_randomize('levies');
     return if $x1 > ( $self->population / 30 );
 
     my $msg = sprintf( "The High King requires %d peasants for his estates\n",
@@ -882,8 +912,8 @@ sub kings_levy {
         int( $x1 * 100 ) );
     $msg .= "HL. of grain instead [Y/n]: ";
 
-    $self->next_step('kings_levy')
-      and $self->throw( display => $msg, request => 'get_yn', default => 'Y' )
+    $self->_next_step('_kings_levy')
+      and $self->throw( display => $msg, action => 'get_yn', default => 'Y' )
       unless $self->input_is_yn();
 
     if ( $self->input =~ /^n/i ) {
@@ -899,7 +929,7 @@ sub kings_levy {
 }
 
 # TODO: find names for the "magic numbers" and change them to constants
-sub war_with_neigbor {
+sub _war_with_neigbor {
     my $self = shift;
 
     if ( $self->king_unrest == -1 ) {
@@ -925,18 +955,19 @@ sub war_with_neigbor {
             $war->{potential} += 2;
             $war->{desire} = $self->year + 5;
         }
-        $self->{war} = int( $self->randomize('war') );
-        $self->next_step('first_strike')
+        $self->{war} = int( $self->_randomize('war') );
+        $self->_next_step('_first_strike')
           unless $self->war > $war->potential;
         $self->_war->{first_strike} =
-          int( $war->{desire} + 85 + ( 18 * $self->randomize('first_strike') ) );
+          int(
+            $war->{desire} + 85 + ( 18 * $self->_randomize('first_strike') ) );
     }
-    $self->next_step('display_msg') if $self->_msg;
+    $self->_next_step('_display_msg') if $self->_msg;
 
     return;
 }
 
-sub first_strike {
+sub _first_strike {
     my $self = shift;
 
     $self->_war->{will} = 1.2 - ( $self->_unrest / 16 );
@@ -944,8 +975,8 @@ sub first_strike {
 
     my $msg = "A nearby Duke threatens war; Will you attack first [y/N]? ";
 
-    $self->next_step('first_strike')
-      and $self->throw( display => $msg, request => 'get_yn', default => 'N' )
+    $self->_next_step('_first_strike')
+      and $self->throw( display => $msg, action => 'get_yn', default => 'N' )
       unless $self->input_is_yn();
 
     my $population = $self->_population;
@@ -953,9 +984,10 @@ sub first_strike {
     $self->{_msg} = '';
     if ( $self->input !~ /^n/i ) {
         if ( $self->_war->{first_strike} >= $x5 ) {
-            $self->next_step('goto_war');
+            $self->_next_step('_goto_war');
             $self->{_msg} = "First strike failed - you need professionals\n";
-            $population->{casualties} = -$self->war - $self->_war->potential - 2;
+            $population->{casualties} =
+              -$self->war - $self->_war->potential - 2;
             $self->_war->{first_strike} += ( 3 * $population->casualties );
         }
         else {
@@ -971,14 +1003,14 @@ sub first_strike {
         }
     }
     else {
-        $self->next_step('goto_war');
+        $self->_next_step('_goto_war');
     }
-    $self->next_step('display_msg') if $self->_msg;
+    $self->_next_step('_display_msg') if $self->_msg;
 
     return;
 }
 
-sub goto_war {
+sub _goto_war {
     my $self = shift;
 
     my $possible = int( $self->grain / 40 );
@@ -986,10 +1018,10 @@ sub goto_war {
     $possible = 0  if $possible < 0;
 
     my $msg = "Hire how many mercenaries at 40 HL each [$possible]? ";
-    $self->next_step('goto_war')
+    $self->_next_step('_goto_war')
       and $self->throw(
         display => $msg,
-        request => 'get_value',
+        action  => 'get_value',
         default => $possible
       ) unless $self->input_is_value();
 
@@ -997,7 +1029,7 @@ sub goto_war {
 
     if ( $hired > 75 ) {
         my $msg = "There are only 75 mercenaries available for hire\n";
-        $self->next_step('goto_war');
+        $self->_next_step('_goto_war');
 
         $self->throw( display => $msg );
     }
@@ -1005,14 +1037,22 @@ sub goto_war {
     my $war  = $self->_war;
     my $land = $self->_land;
 
-    $war->{desire} = int( $war->desire * $self->war_constant );
     my $x5 = int( ( $self->population * $war->will ) + ( 7 * $hired ) + 13 );
+
+    $war->{desire} = int( $war->desire * WAR_CONSTANT );
+    print "General unrest: $self->{unrest}";
+    print '  annual: ' . ( $self->{_unrest} || 'undef' );
+    print "  desire: $war->{desire}\n";
+    print "will to fight: $war->{will}";
+    print "  x5: $x5\n"
+      if $DEBUG;
+
     my $x6 = $war->desire - ( 4 * $hired ) - int( $x5 / 4 );
-    $war->{desire}      = $x5 - $war->desire;
+    $war->{desire}  = $x5 - $war->desire;
     $land->{spoils} = int( 0.8 * $war->desire );
     if ( -$land->spoils > int( 0.67 * $self->land ) ) {
         $self->{_steps} = [];
-        $self->_set_status('game_over');
+        $self->_set_status(ABOLISHED);
 
         my $msg = "You have been overrun and have lost the entire Dukedom\n";
         $msg .= "The placement of your head atop the castle gate\n";
@@ -1052,14 +1092,15 @@ sub goto_war {
     $msg = '';
     if ( $land->spoils < 399 ) {
         if ( $war->desire >= 0 ) {
-            $msg             = "You have won the war\n";
-            $war->{grain_damage}       = 0.67;
-            $grain->{spoils} = int( 1.7 * $land->spoils );
+            $msg                 = "You have won the war\n";
+            $war->{grain_damage} = 0.67;
+            $grain->{spoils}     = int( 1.7 * $land->spoils );
             $self->grain += $grain->spoils;
         }
         else {
             $msg = "You have lost the war\n";
-            $war->{grain_damage} = int(($grain->yield / $self->land) * 100) / 100;
+            $war->{grain_damage} =
+              int( ( $grain->yield / $self->land ) * 100 ) / 100;
         }
         if ( $x6 <= 9 ) {
             $x6 = 0;
@@ -1109,22 +1150,22 @@ sub goto_war {
     $self->{_unrest} -=
       ( 2 * $population->casualties ) - ( 3 * $population->looted );
 
-    $self->next_step('display_msg') if $self->{_msg} = $msg;
+    $self->_next_step('_display_msg') if $self->{_msg} = $msg;
 
     return;
 }
 
-sub population_changes {
+sub _population_changes {
     my $self = shift;
 
-    my $x1 = $self->randomize('disease');
+    my $x1 = $self->_randomize('disease');
 
     my $population = $self->_population;
     my $x2;
     if ( $x1 <= 3 ) {
         if ( $x1 != 1 ) {
             $self->{_msg} = "A POX EPIDEMIC has broken out\n";
-            $self->next_step('display_msg');
+            $self->_next_step('_display_msg');
 
             $x2 = $x1 * 5;
             $population->{diseased} = -int( $self->population / $x2 );
@@ -1132,7 +1173,7 @@ sub population_changes {
         }
         elsif ( $self->black_D <= 0 ) {
             $self->{_msg} = "The BLACK PLAGUE has struck the area\n";
-            $self->next_step('display_msg');
+            $self->_next_step('_display_msg');
 
             $self->{black_D}        = 13;
             $x2                     = 3;
@@ -1141,7 +1182,7 @@ sub population_changes {
         }
     }
 
-    $x1 = $population->looted ? 4.5 : $self->randomize('birth') + 4;
+    $x1 = $population->looted ? 4.5 : $self->_randomize('birth') + 4;
 
     $population->{births} = int( $self->population / $x1 );
     $population->{deaths} = int( 0.3 - ( $self->population / 22 ) );
@@ -1152,31 +1193,33 @@ sub population_changes {
     return;
 }
 
-sub harvest_grain {
+sub _harvest_grain {
     my $self = shift;
 
     my $grain = $self->_grain;
 
     $grain->{yield} = int( $self->yield * $grain->yield );
     $self->{grain} += $grain->yield;
-    my $x1 = $grain->yield - 4000;
 
+    my $x1 = $grain->yield - 4000;
     $grain->{expense} = -int( 0.1 * $x1 ) if $x1 > 0;
 
-    $grain->{expense} -= 120;
+    $grain->{expense} -= MIN_EXPENSE;
     $self->{grain} += $grain->expense;
 
+    # you've already told the King what to do with his taxes, he's coming
+    # to collect them (and more) in person now.
     return if $self->king_unrest < 0;
 
-    $x1 = -int( $self->land / 2 );
-    $x1 = ( 2 * $x1 ) if $self->king_unrest >= 2;
+    my $tax_rate = $self->king_unrest >= 2 ? TAX_RATE * 2 : TAX_RATE;
+    $x1 = -int( $self->land * $tax_rate );
 
     if ( -$x1 > $self->grain ) {
         $self->{_msg} = "You have insufficient grain to pay the royal tax\n";
         $self->{_msg} .= "the High King has abolished your Ducal right\n\n";
-        $self->next_step('display_msg');
+        $self->_next_step('_display_msg');
 
-        $self->_set_status('game_over');
+        $self->_set_status(ABOLISHED);
         return 1;
     }
     $grain->{taxes} += $x1;
@@ -1185,69 +1228,86 @@ sub harvest_grain {
     return;
 }
 
-sub update_unrest {
+sub _update_unrest {
     my $self = shift;
 
-    $self->{unrest} = int( $self->unrest * 0.85 ) + $self->_unrest;
+    $self->{unrest} = int( $self->unrest * UNREST_FACTOR ) + $self->_unrest;
 
     return;
 }
 
-sub end_of_game_check {
+sub _quit_game {
+    my $self = shift;
+
+    $self->_set_status(QUIT_GAME);
+    $self->{_steps} = [];
+
+    return;
+}
+
+sub _end_of_game_check {
     my $self = shift;
 
     my $msg = '';
 
-    if (   ( $self->grain < 429 )
-        || ( $self->_unrest > 88 )
-        || ( $self->unrest > 99 ) )
+    if ( $self->status eq QUIT_GAME ) {
+        $msg = "\nYou have conceded the game\n\n";
+    }
+    elsif (( $self->grain < MIN_GRAIN )
+        || ( $self->_unrest > MAX_1YEAR_UNREST )
+        || ( $self->unrest > MAX_TOTAL_UNREST ) )
     {
         $msg = "\nThe peasants tire of war and starvation\n";
         $msg .= "You are deposed!\n\n";
+
+        print "General unrest: $self->{unrest}  annual: $self->{_unrest}\n"
+          if $DEBUG;
+
+        $self->_set_status(DEPOSED);
     }
-    elsif ( $self->population < 33 ) {
+    elsif ( $self->population < MIN_POPULATION ) {
         $msg = "You have so few peasants left that\n";
         $msg .= "the High King has abolished your Ducal right\n\n";
+
+        $self->_set_status('ABOLISHED');
     }
-    elsif ( $self->land < 199 ) {
+    elsif ( $self->land < MIN_LAND ) {
         $msg = "You have so little land left that\n";
         $msg .= "the High King has abolished your Ducal right\n\n";
+
+        $self->_set_status(ABOLISHED);
     }
-    elsif ( $self->year >= 45 && !$self->king_unrest ) {
+    elsif ( $self->year >= MAX_YEAR && !$self->king_unrest ) {
         $msg = "You have reached the age of mandatory retirement\n\n";
+
+        $self->_set_status(RETIRED);
     }
 
-    $self->_set_status('game_over') and $self->throw( display => $msg )
-      if $msg;
+    $self->throw( display => $msg ) if $self->game_over;
 
     return;
 }
 
-sub game_over {
-    my $self = shift;
-
-    return !!( $self->status eq 'game_over' );
-}
-
 sub _insufficient_grain {
-    my $self = shift;
+    my $self   = shift;
+    my $action = shift;
+
+    my %msgs = (
+        feed => sprintf( "You have %d HL. of grain left,\n", $self->grain ),
+        buy  => sprintf( "Enough to buy %d HA. of land\n",
+            int( $self->grain / $self->_land->{price} ) ),
+        plant => sprintf( "Enough to plant %d HA. of land\n\n",
+            int( $self->grain / 2 ) ),
+    );
 
     my $msg = "You don't have enough grain\n";
-    $msg .= sprintf( "You have %d HL. of grain left,\n", $self->grain );
-
-    $msg .= sprintf( "Enough to buy %d HA. of land\n",
-        int( $self->grain / $self->_land->{price} ) )
-      if $self->_land->{price} >= MIN_LAND_PRICE;
-
-    $msg .=
-      sprintf( "Enough to plant %d HA. of land\n\n", int( $self->grain / 2 ) );
+    $msg .= $msgs{$action};
 
     return $msg;
 }
 
 sub end_of_year_report {
     my $self = shift;
-
 
     my $msg = "\n";
     for ( sort( keys( %{ $self->_population } ) ) ) {
@@ -1283,7 +1343,11 @@ Games::Dukedom - The classic big-iron game
 
 =head1 SYNOPSIS
 
-  use Games::Dukedom;
+  
+ use Games::Dukedom;
+  
+ my $game = Games::Dukedom->new();
+  
 
 =head1 DESCRIPTION
 
@@ -1291,6 +1355,99 @@ This is an implementation of the classic game of "Dukedom". It is intended
 to be display agnostic so that it can be used not only by command line
 scripts such as the one included but also by graphical UIs such as Tk
 or web sites.
+
+It has been implemented as an "interrupt driven" state-machine. The actual
+executable only needs to provide the callback hooks to display messages
+and collect appropriate input as requested.
+
+=head1 CONSTRUCTOR
+
+One begins the game by calling the expected C<new> method like so:
+
+  
+ my $game = Games::Dukedom->new();
+  
+  
+It currently does not take any parameters.
+
+=head1 ACCESSORS
+
+=head2 black_D
+
+=head2 grain
+
+=head2 input
+
+=head2 king_unrest
+
+=head2 land
+
+=head2 land_fertility
+
+=head2 population
+
+=head2 status
+
+=head2 unrest
+
+=head2 war
+
+=head2 year
+
+=head2 yield
+
+=head1 METHODS
+
+=head2 play_one_year
+
+This method begins a new year of play. It initializes the temporary structures
+and factors and resets the state-machine.
+
+=head2 game_over
+
+Indicates that current game is over and further play is not possible.
+A "win" is indicated by a positive value, a "loss" by a negative one.
+
+=over 4
+
+=item 2 - It's GOOD to be the King!
+
+=item 1 - You have retired
+
+=item -1 - You have been deposed
+
+=item -2 - Don't mess with the King!
+
+=item -3 - You have abandoned the game
+
+=back
+
+=head2 input_is_yn
+
+Returns a boolean indicating that the current contents of C<< $self->input >>
+is either "Y" or "N" (case insensitive).
+
+=head2 input_is_value
+
+Returns a boolean indicating that the current contents of C<< $self->input >>
+is "0" or a positive integer.
+
+=head2 summary_report
+
+=head2 fertility_report
+
+=head2 end_of_year_report
+
+=head1 SEE ALSO
+
+This package is based on the logic found in this C code, which appears to
+have been derived from an older source written in Basic:
+
+L<https://github.com/caryo/Dukedom/blob/master/imports/dukedom.c>
+
+=head1 BUGS
+
+Seriously? Look at the version number.
 
 =head1 AUTHOR
 

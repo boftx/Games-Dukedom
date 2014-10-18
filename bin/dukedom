@@ -39,9 +39,9 @@ sub play_game {
         catch {
             if ( blessed($_) && $_->isa('Games::Dukedom::Signal') ) {
                 &{ $game->show_msg }( $_->display ) if $_->display;
-                if ( defined( $_->request ) ) {
-                    my $request = $_->request;
-                    $game->input( &{ $game->$request } || $_->default );
+                if ( defined( $_->action ) ) {
+                    my $action = $_->action;
+                    $game->input( &{ $game->$action }($_->default) );
                 }
             }
             else {
@@ -49,9 +49,6 @@ sub play_game {
             }
         };
     } until ( $game->game_over );
-
-    #print Dumper($game);
-    #print $game->end_of_year_report;
 
     return;
 }

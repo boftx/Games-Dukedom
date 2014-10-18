@@ -16,7 +16,8 @@ WriteMakefile(
         'ExtUtils::MakeMaker' => 6.59,
     },
     BUILD_REQUIRES => {
-        'Test::More' => 0,
+        'Test::More'      => 0,
+        'Test::Exception' => 0,
     },
     PREREQ_PM => {
         # NOTE the use of quotes around non-numeric strings!
@@ -30,6 +31,7 @@ WriteMakefile(
         'MooX::StrictConstructor' => 0,
         'MooX::ClassAttribute'    => 0,
         'MooX::Struct'            => 0,
+        'Throwable'               => 0,
     },
     dist  => { COMPRESS => 'gzip -9f', SUFFIX => 'gz', },
     clean => { FILES => 'Games-Dukedom-*' },
