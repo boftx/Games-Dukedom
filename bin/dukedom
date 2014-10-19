@@ -1,5 +1,7 @@
 #!/usr/local/bin/perl
 
+$| = 1;
+
 use strict;
 use warnings;
 
@@ -11,9 +13,37 @@ use Games::Dukedom;
 use Storable qw( freeze thaw );
 
 use Data::Dumper;
-$Data::Dumper::Indent = 1;
+$Data::Dumper::Indent   = 1;
+$Data::Dumper::Sortkeys = 1;
 
 my $VERSION = '0.1_1';
+
+my $input_yn = sub {
+    my $default = shift || '';
+
+    my $ans = <>;
+    chomp($ans);
+    $ans ||= $default;
+
+    return ( $ans =~ /^(?:q|quit)\s*$/i || $ans =~ /^(?:y|n)$/i )
+      ? lc($ans)
+      : undef;
+};
+
+my $input_value = sub {
+    my $default = shift || 0;
+
+    my $ans = <>;
+    chomp($ans);
+    $ans = $default unless length($ans);
+
+    return ( $ans =~ /^(?:q|quit)\s*$/i || $ans !~ /\D/ ) ? $ans : undef;
+};
+
+my %actions = (
+    get_yn    => $input_yn,
+    get_value => $input_value,
+);
 
 while (1) {
     play_game();
@@ -38,11 +68,11 @@ sub play_game {
         }
         catch {
             if ( blessed($_) && $_->isa('Games::Dukedom::Signal') ) {
-                &{ $game->show_msg }( $_->display ) if $_->display;
-                if ( defined( $_->action ) ) {
-                    my $action = $_->action;
-                    $game->input( &{ $game->$action }($_->default) );
-                }
+                print $_->display if $_->display;
+                return unless defined( $_->action );
+
+                my $action = $_->action;
+                $game->input( &{ $actions{$action} }( $_->default ) );
             }
             else {
                 die $_;

@@ -7,6 +7,15 @@ use overload
   q{""}    => 'as_string',
   fallback => 1;
 
+around BUILDARGS => sub {
+    my $orig  = shift;
+    my $class = shift;
+
+    unshift( @_, 'display' ) if @_ == 1 && !ref( $_[0] );
+
+    return $class->$orig( {@_} );
+};
+
 has display => (
     is      => 'ro',
     default => undef,
