@@ -13,6 +13,7 @@ WriteMakefile(
     ABSTRACT_FROM      => 'lib/Games/Dukedom.pm',
     LICENSE            => 'Perl',
     PL_FILES           => {},
+    EXE_FILES          => ['bin/dukedom'],
     CONFIGURE_REQUIRES => {
         'ExtUtils::MakeMaker' => 6.59,
     },
@@ -37,4 +38,5 @@ WriteMakefile(
     },
     dist  => { COMPRESS => 'gzip -9f', SUFFIX => 'gz', },
     clean => { FILES    => 'Games-Dukedom-*' },
+    META_MERGE => { no_index => { directory => [qw( xt )] } },
 );
