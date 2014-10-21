@@ -1,4 +1,4 @@
-#!/usr/local/bin/perl
+#!perl
 
 $| = 1;
 
@@ -9,12 +9,6 @@ use Scalar::Util qw( blessed );
 use Try::Tiny;
 
 use Games::Dukedom;
-
-use Storable qw( freeze thaw );
-
-use Data::Dumper;
-$Data::Dumper::Indent   = 1;
-$Data::Dumper::Sortkeys = 1;
 
 my $VERSION = '0.1_1';
 
@@ -68,7 +62,7 @@ sub play_game {
         }
         catch {
             if ( blessed($_) && $_->isa('Games::Dukedom::Signal') ) {
-                print $_->display if $_->display;
+                print $_->msg if $_->msg;
                 return unless defined( $_->action );
 
                 my $action = $_->action;
@@ -85,3 +79,43 @@ sub play_game {
 
 __END__
 
+=pod
+
+=head1 NAME
+
+dukedom - The classic big iron game of land management
+
+=head1 SYNOPSIS
+
+  
+ $ dukedom
+   
+  
+=head1 DESCRIPTION
+
+=head1 GAMEPLAY
+
+=head1 SEE ALSO
+
+This package is based on the logic found in this C code, which appears to
+have been derived from an older source written in Basic:
+
+L<https://github.com/caryo/Dukedom/blob/master/imports/dukedom.c>
+
+=head1 BUGS
+
+Seriously? Look at the version number.
+
+=head1 AUTHOR
+
+Jim Bacon, E<lt>jim@nortx.comE<gt>
+
+=head1 COPYRIGHT AND LICENSE
+
+Copyright (C) 2014 by Jim Bacon
+
+This library is free software; you can redistribute it and/or modify it
+under the same terms as Perl itself, either Perl version 5.8 or,
+at your option, any later version of Perl 5 you may have available.
+
+=cut

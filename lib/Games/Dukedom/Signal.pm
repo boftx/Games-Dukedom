@@ -11,12 +11,12 @@ around BUILDARGS => sub {
     my $orig  = shift;
     my $class = shift;
 
-    unshift( @_, 'display' ) if @_ == 1 && !ref( $_[0] );
+    unshift( @_, 'msg' ) if @_ == 1 && !ref( $_[0] );
 
     return $class->$orig( {@_} );
 };
 
-has display => (
+has msg => (
     is      => 'ro',
     default => undef,
 );
@@ -34,7 +34,7 @@ has default => (
 sub as_string {
     my $self = shift;
 
-    return $self->display;
+    return $self->msg;
 }
 
 1;
@@ -58,15 +58,44 @@ Games::Dukedom::Signal = provide "interrupts" to drive the state-machine
 =head1 DESCRIPTION
 
 This module is used to signal the application code that a display or input
-action is needed.
+action is needed. This is accomplished by means of the L<Throwable> role.
 
-=head1 ACCESSORS
+=head1 ATTRIBUTES
 
-=head2 display
+All attributes have read-only accessors.
+
+=head2 msg
+
+Holds a msg to be presented to the user by the caller if present.
 
 =head2 action
 
+Tells the caller what action should be taken before re-entering the main
+state-machine loop, if present. Currently takes one of the following values:
+
+=over 4
+
+=item C<undef>
+
+Indicates that no action is needed other than displaying any message that
+is present.
+
+=item C<get_yn>
+
+Indicates that the caller should supply a "y" or "n" response in
+C<< $game->input >>.
+
+=item C<get_value>
+
+Indicates that the caller should supply a numeric response in
+C<< $game->input >>.
+
+=back
+
 =head2 default
+
+Provides a default responsei, if present, that may be used if desired to
+satisfy the requested action.
 
 =head1 METHODS
 
