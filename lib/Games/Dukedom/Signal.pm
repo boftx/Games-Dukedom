@@ -1,5 +1,7 @@
 package Games::Dukedom::Signal;
 
+our $VERSION = 'v0.1.1';
+
 use Moo;
 with 'Throwable';
 

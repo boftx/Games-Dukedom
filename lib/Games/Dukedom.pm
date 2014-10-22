@@ -1,6 +1,6 @@
 package Games::Dukedom;
 
-our $VERSION = 'v0.1_1';
+our $VERSION = 'v0.1.1';
 
 our $DEBUG = 0;
 

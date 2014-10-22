@@ -10,7 +10,7 @@ use Try::Tiny;
 
 use Games::Dukedom;
 
-my $VERSION = '0.1_1';
+my $VERSION = '0.1.1';
 
 my $input_yn = sub {
     my $default = shift || '';
