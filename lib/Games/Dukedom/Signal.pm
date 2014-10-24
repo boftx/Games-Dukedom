@@ -1,6 +1,6 @@
 package Games::Dukedom::Signal;
 
-our $VERSION = 'v0.1.1';
+our $VERSION = 'v0.1.2';
 
 use Moo;
 with 'Throwable';
@@ -36,7 +36,7 @@ has default => (
 sub as_string {
     my $self = shift;
 
-    return $self->msg;
+    return $self->msg || '';
 }
 
 1;
@@ -56,6 +56,23 @@ Games::Dukedom::Signal = provide "interrupts" to drive the state-machine
   
  my $game = Games::Dukedom->new();
   
+ $game->throw( 'This is a simple message' );
+  
+ $game->throw(
+    msg     => 'This is also a simple message',
+ )
+  
+ $game->throw(
+    msg     => 'Do you want to be King? ',
+    action  => 'get_yn',
+ )
+  
+ $game->throw(
+    msg     => 'Are you sure [Y/n]? ',
+    action  => 'get_yn',
+    default => 'Y'
+ )
+  
 
 =head1 DESCRIPTION
 
@@ -68,7 +85,7 @@ All attributes have read-only accessors.
 
 =head2 msg
 
-Holds a msg to be presented to the user by the caller if present.
+Holds a message to be presented to the user by the caller, if present.
 
 =head2 action
 
@@ -96,7 +113,7 @@ C<< $game->input >>.
 
 =head2 default
 
-Provides a default responsei, if present, that may be used if desired to
+Provides a default response, if present, that may be used if desired to
 satisfy the requested action.
 
 =head1 METHODS
@@ -105,6 +122,10 @@ satisfy the requested action.
 
 This method will provide a string representing the error, containing the
 error's message.
+
+=head1 SEE ALSO
+
+L<Games::Dukedom>
 
 =head1 AUTHOR
 
