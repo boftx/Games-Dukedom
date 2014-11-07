@@ -1,21 +1,18 @@
 package Games::Dukedom;
 
-our $VERSION = 'v0.1.1';
-
-our $DEBUG = 0;
+our $VERSION = 'v0.1.2';
 
 use Storable qw( freeze thaw );
 use Carp;
 
 use Games::Dukedom::Signal;
 
-use Moo;
+use Moo 1.004003;
 use MooX::StrictConstructor;
 use MooX::ClassAttribute;
 
 use MooX::Struct -rw, Land => [
     qw(
-      +delta
       +trades
       +spoils
       +price
@@ -25,7 +22,6 @@ use MooX::Struct -rw, Land => [
   ],
   Population => [
     qw(
-      +delta
       +starvations
       +levy
       +casualties
@@ -37,7 +33,6 @@ use MooX::Struct -rw, Land => [
   ],
   Grain => [
     qw(
-      +delta
       +food
       +trades
       +seed
@@ -52,11 +47,11 @@ use MooX::Struct -rw, Land => [
   War => [
     qw(
       +first_strike
-      +potential
+      +tension
       +desire
       +will
       +grain_damage
-      +tension
+      +risk
       )
   ];
 
@@ -101,6 +96,22 @@ my @steps = (
       _update_unrest
       )
 );
+
+my @settable_steps = (
+    qw(
+      _display_msg
+      _feed_the_peasants
+      _purchase_land
+      _sell_land
+      _king_wants_war
+      _grain_production
+      _kings_levy
+      _first_strike
+      _goto_war
+      _quit_game
+      )
+);
+
 
 my %traits = (
     price => {
@@ -316,6 +327,12 @@ has _msg => (
     default  => undef,
 );
 
+has detail_report => (
+    is       => 'ro',
+    init_arg => undef,
+    default  => '',
+);
+
 sub BUILD {
     my $self = shift;
 
@@ -364,6 +381,8 @@ sub play_one_year {
     my $self   = shift;
     my $params = @_;
 
+    return if $self->game_over;
+
     while ( @{ $self->_steps } ) {
         my $step = shift( @{ $self->_steps } );
 
@@ -371,7 +390,7 @@ sub play_one_year {
         $self->clear_input;
     }
 
-    #print $self->_end_of_year_report();
+    $self->_prep_detail_report();
 
     $self->{tax_paid} += $self->_grain->taxes;
     $self->_clear_steps;
@@ -388,14 +407,15 @@ sub play_one_year {
 sub game_over {
     my $self = shift;
 
-    return !!( $self->status != RUNNING );
+    return !( $self->status == RUNNING );
 }
 
 sub _next_step {
     my $self = shift;
     my $next = shift;
 
-    croak 'Illegal value for "_next_step"' unless $self->can($next);
+    croak "Illegal value for '_next_step': $next"
+      unless grep( /^$next$/, @settable_steps);
 
     return unshift( @{ $self->_steps }, $next );
 }
@@ -411,10 +431,6 @@ sub _init_year {
     my $self = shift;
 
     ++$self->{year};
-
-    $self->_population->delta( $self->population );
-    $self->_grain->delta( $self->grain );
-    $self->_land->delta( $self->land );
 
     $self->{_unrest} = 0;
 
@@ -446,15 +462,6 @@ sub _summary_report {
     my $msg = sprintf( "\nYear %d Peasants %d Land %d Grain %d Taxes %d\n",
         $self->year, $self->population, $self->land, $self->grain,
         $self->tax_paid );
-
-    return $msg;
-}
-
-sub _debug_report {
-    my $self = shift;
-
-    my $msg = sprintf( "\nPeasants %d Land %d Grain %d\n",
-        $self->population, $self->land, $self->grain );
 
     return $msg;
 }
@@ -547,7 +554,6 @@ sub _purchase_land {
 
     my $msg = '';
 
-    #$msg .= $self->_debug_report;
     $msg .= sprintf( "Land to buy at %d HL/HA [0]: ", int( $land->{price} ) );
     $self->_next_step('_purchase_land')
       and $self->throw( msg => $msg, action => 'get_value', default => 0 )
@@ -581,11 +587,6 @@ sub _sell_land {
         $self->throw("Buyers have lost interest\n");
     }
 
-    my $x1 = 0;
-    for ( 100, 80, 60 ) {
-        $x1 += $self->land_fertility->{$_};
-    }
-
     my $price = --$land->{sell_price};
 
     my $msg = sprintf( "Land to sell at %d HL/HA [0]: ", $price );
@@ -594,6 +595,11 @@ sub _sell_land {
       unless $self->input_is_value();
 
     return unless my $sold = $self->input;
+
+    my $x1 = 0;
+    for ( 100, 80, 60 ) {
+        $x1 += $self->land_fertility->{$_};
+    }
 
     $self->{_msg} = undef;
     if ( $sold > $x1 ) {
@@ -631,7 +637,7 @@ sub _sell_land {
     }
 
     $self->land_fertility->{$sold_q} -= $sold;
-    $self->land += $land->trades;
+    $self->{land} += $land->trades;
 
     $self->_set_status(ABOLISHED) if $self->land < 10;
 
@@ -700,7 +706,7 @@ sub _king_wants_war {
 
     return unless $self->king_unrest > 0;
 
-    my $msg = "The King demands twice the royal tax in the\n";
+    my $msg = "\nThe King demands twice the royal tax in the\n";
     $msg .= 'hope of provoking war.  Will you pay? [Y/n]: ';
 
     $self->_next_step('_king_wants_war')
@@ -729,7 +735,6 @@ sub _grain_production {
 
     my $msg = '';
 
-    #$msg .= $self->_debug_report;
     $msg .= sprintf( "Land to plant [%d]: ", $max_plant );
     $self->_next_step('_grain_production')
       and $self->throw(
@@ -880,10 +885,10 @@ sub _kings_levy {
     my $x1 = $self->_randomize('levies');
     return if $x1 > ( $self->population / 30 );
 
-    my $msg = sprintf( "The High King requires %d peasants for his estates\n",
+    my $msg = sprintf( "\nThe High King requires %d peasants for his estates ",
         int($x1) );
-    $msg .= sprintf( "and mines.  Will you supply them or pay %d\n",
-        int( $x1 * 100 ) );
+    $msg .= "and mines.\n";
+    $msg .= sprintf( "Will you supply them or pay %d ", int( $x1 * 100 ) );
     $msg .= "HL. of grain instead [Y/n]: ";
 
     $self->_next_step('_kings_levy')
@@ -914,8 +919,11 @@ sub _war_with_neigbor {
     }
     else {
         my $war = $self->_war;
-        $war->{potential} = int( 11 - ( 1.5 * $self->yield ) );
-        $war->{potential} = 2 if ( $war->potential < 2 );
+
+        # are you worth coming after?
+        $war->{tension} = int( 11 - ( 1.5 * $self->yield ) );
+        $war->{tension} = 2 if ( $war->tension < 2 );
+
         if (   $self->king_unrest
             || ( $self->population <= 109 )
             || ( ( 17 * ( $self->land - 400 ) + $self->grain ) <= 10600 ) )
@@ -926,16 +934,13 @@ sub _war_with_neigbor {
             $self->{_msg} = "\nThe High King grows uneasy and may\n";
             $self->{_msg} .= "be subsidizing wars against you\n";
 
-            $war->{potential} += 2;
+            $war->{tension} += 2;
             $war->{desire} = $self->year + 5;
         }
 
-        #$self->{war} = int( $self->_randomize('war') );
-        $war->{tension} = int( $self->_randomize('war') );
-        $self->_next_step('_first_strike')
+        $war->{risk} = int( $self->_randomize('war') );
+        $self->_next_step('_first_strike') if $war->tension > $war->risk;
 
-          #unless $self->war > $war->potential;
-          unless $war->tension > $war->potential;
         $war->{first_strike} =
           int(
             $war->{desire} + 85 + ( 18 * $self->_randomize('first_strike') ) );
@@ -950,7 +955,7 @@ sub _first_strike {
 
     my $war = $self->_war;
     $war->{will} = 1.2 - ( $self->_unrest / 16 );
-    my $x5 = int( $self->population * $war->will ) + 13;
+    my $resistance = int( $self->population * $war->will ) + 13;
 
     my $msg = "A nearby Duke threatens war; Will you attack first [y/N]? ";
 
@@ -962,16 +967,16 @@ sub _first_strike {
 
     $self->{_msg} = '';
     if ( $self->input !~ /^n/i ) {
-        if ( $war->{first_strike} >= $x5 ) {
+        if ( $war->{first_strike} >= $resistance ) {
             $self->_next_step('_goto_war');
             $self->{_msg} = "First strike failed - you need professionals\n";
-            $population->{casualties} = -$war->tension - $war->potential - 2;
+            $population->{casualties} = -$war->risk - $war->tension - 2;
             $war->{first_strike} += ( 3 * $population->casualties );
         }
         else {
             $self->{_msg} = "Peace negotiations were successful\n";
 
-            $population->{casualties} = -$war->potential - 1;
+            $population->{casualties} = -$war->tension - 1;
             $war->{first_strike}      = 0;
         }
         $self->{population} += $population->casualties;
@@ -1015,20 +1020,12 @@ sub _goto_war {
     my $war  = $self->_war;
     my $land = $self->_land;
 
-    my $x5 = int( ( $self->population * $war->will ) + ( 7 * $hired ) + 13 );
+    my $resistance = int( ( $self->population * $war->will ) + ( 7 * $hired ) + 13 );
 
     $war->{desire} = int( $war->desire * WAR_CONSTANT );
 
-    if ($DEBUG) {
-        print "General unrest: $self->{unrest}";
-        print '  annual: ' . ( $self->{_unrest} || 'undef' );
-        print "  desire: $war->{desire}\n";
-        print "will to fight: $war->{will}";
-        print "  x5: $x5\n";
-    }
-
-    my $x6 = $war->desire - ( 4 * $hired ) - int( $x5 / 4 );
-    $war->{desire}  = $x5 - $war->desire;
+    my $x6 = $war->desire - ( 4 * $hired ) - int( $resistance / 4 );
+    $war->{desire}  = $resistance - $war->desire;
     $land->{spoils} = int( 0.8 * $war->desire );
     if ( -$land->spoils > int( 0.67 * $self->land ) ) {
         $self->{_steps} = [];
@@ -1048,23 +1045,23 @@ sub _goto_war {
     for ( 100, 80, 60 ) {
         my $x3 = int( $x1 / ( 3 - ( 5 - ( $_ / 20 ) ) ) );
         if ( -$x3 <= $fertility->{$_} ) {
-            $x5 = $x3;
+            $resistance = $x3;
         }
         else {
-            $x5 = -$fertility->{$_};
+            $resistance = -$fertility->{$_};
         }
-        $fertility->{$_} += $x5;
-        $x1 = $x1 - $x5;
+        $fertility->{$_} += $resistance;
+        $x1 = $x1 - $resistance;
     }
     for ( 40, 20, 0 ) {
         if ( -$x1 <= $fertility->{$_} ) {
-            $x5 = $x1;
+            $resistance = $x1;
         }
         else {
-            $x5 = -$fertility->{$_};
+            $resistance = -$fertility->{$_};
         }
-        $fertility->{$_} += $x5;
-        $x1 = $x1 - $x5;
+        $fertility->{$_} += $resistance;
+        $x1 = $x1 - $resistance;
     }
 
     my $grain = $self->_grain;
@@ -1072,13 +1069,15 @@ sub _goto_war {
     $msg = '';
     if ( $land->spoils < 399 ) {
         if ( $war->desire >= 0 ) {
-            $msg                 = "You have won the war\n";
+            $msg = "You have won the war\n";
+
             $war->{grain_damage} = 0.67;
             $grain->{spoils}     = int( 1.7 * $land->spoils );
             $self->grain += $grain->spoils;
         }
         else {
             $msg = "You have lost the war\n";
+
             $war->{grain_damage} =
               int( ( $grain->yield / $self->land ) * 100 ) / 100;
         }
@@ -1241,9 +1240,6 @@ sub _end_of_game_check {
         $msg = "\nThe peasants tire of war and starvation\n";
         $msg .= "You are deposed!\n\n";
 
-        print "General unrest: $self->{unrest}  annual: $self->{_unrest}\n"
-          if $DEBUG;
-
         $self->_set_status(DEPOSED);
     }
     elsif ( $self->population < MIN_POPULATION ) {
@@ -1287,7 +1283,7 @@ sub _insufficient_grain {
     return $msg;
 }
 
-sub _end_of_year_report {
+sub _prep_detail_report {
     my $self = shift;
 
     my $msg = "\n";
@@ -1310,7 +1306,9 @@ sub _end_of_year_report {
         $msg .= sprintf( "%-20.20s %d\n", $_, $self->_war->$_ );
     }
 
-    return $msg;
+    $self->{detail_report} = $msg;
+
+    return;
 }
 
 1;
@@ -1547,20 +1545,30 @@ possible. Check C<status> for reason if desired.
 
 =head2 input_is_yn
 
-Returns a boolean indicating that the current content of C<< $game->input >>
-is either "Y" or "N" (case insensitive).
+Boolean that returns C<1> if the current content of C<< $game->input >>
+is either "Y" or "N" (case insensitive) or C<undef> otherwise.
 
 =head2 input_is_value
 
-Returns a boolean indicating that the current content of C<< $game->input >>
-is "0" or a positive integer.
+Boolean that returns C<1> if the current content of C<< $game->input >>
+is "0" or a positive integer and C<undef> otherwise.
 
 =head1 SEE ALSO
+
+L<Games::Dukedom::Signal>
 
 This package is based on the logic found in this C code, which appears to
 have been derived from an older source written in Basic:
 
 L<https://github.com/caryo/Dukedom/blob/master/imports/dukedom.c>
+
+A good description of the goals of the game and how to play is here:
+
+L<http://dukedomsbv.codeplex.com/documentation>
+
+and here:
+
+L<http://www.atariarchives.org/bigcomputergames/showpage.php?page=11>
 
 =head1 BUGS
 

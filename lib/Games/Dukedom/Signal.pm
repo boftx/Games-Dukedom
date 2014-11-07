@@ -36,7 +36,12 @@ has default => (
 sub as_string {
     my $self = shift;
 
-    return $self->msg || '';
+    my $str = ref($self);
+    for ( keys(%{$self}) ) {
+        $str .= "\n  $_: " . ($self->{$_} || '');
+    }
+
+    return $str;
 }
 
 1;

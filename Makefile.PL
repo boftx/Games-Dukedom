@@ -7,6 +7,7 @@ use warnings FATAL => 'all';
 use ExtUtils::MakeMaker 6.59;
 
 WriteMakefile(
+    MIN_PERL_VERSION   => '5.6.0',
     NAME               => 'Games::Dukedom',
     AUTHOR             => 'Jim Bacon <jim@nortx.com>',
     VERSION_FROM       => 'lib/Games/Dukedom.pm',
@@ -28,7 +29,7 @@ WriteMakefile(
         #'Foo::Bar::Module' => 5.004001,
         #'Foo::Bar::Module' => '5.4.1',
         #'Foo::Bar::Module' => 'v5.4.1',
-        'Moo'                     => 0,
+        'Moo'                     => 1.004003,
         'MooX::StrictConstructor' => 0,
         'MooX::ClassAttribute'    => 0,
         'MooX::Struct'            => 0,
