@@ -1,6 +1,6 @@
 package Games::Dukedom;
 
-our $VERSION = 'v0.1.2';
+our $VERSION = 'v0.1.3';
 
 use Storable qw( freeze thaw );
 use Carp;
@@ -1073,7 +1073,7 @@ sub _goto_war {
 
             $war->{grain_damage} = 0.67;
             $grain->{spoils}     = int( 1.7 * $land->spoils );
-            $self->grain += $grain->spoils;
+            $self->{grain} += $grain->spoils;
         }
         else {
             $msg = "You have lost the war\n";
